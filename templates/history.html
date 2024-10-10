@@ -1,0 +1,23 @@
+
+{% extends "base.html" %}
+{% block content %}
+
+
+    
+    
+<body>
+    <div class="container mt-4">
+        <h1 class="text-center">Watch Recordings</h1>
+        <div class="list-group mt-4">
+            <!-- Dynamically populate this section with MP4 files from the server -->
+            {% for recording in recordings %}
+                <a href="{{ url_for('static', filename='recordings/' + recording) }}" class="list-group-item list-group-item-action">
+                    {{ recording }}
+                </a>
+            {% endfor %}
+        </div>
+    </div>
+    
+    
+</body>
+{% endblock %}

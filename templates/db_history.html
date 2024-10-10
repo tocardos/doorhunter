@@ -1,0 +1,20 @@
+
+{% extends "base.html" %}
+{% block title %}Recording History{% endblock %}
+{% block content %}
+    <h1 class="my-4">Recording History</h1>
+    <div class="row">
+        {% for recording in recordings %}
+        <div class="col-12 col-md-6 recording-item">
+            <h3 class="recording-timestamp">{{ recording.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</h3>
+            <video class="recording-video" controls>
+                <source src="{{ url_for('recordings', filename=recording.filename) }}" type="video/mp4">
+                Your browser does not support the video tag.
+            </video>
+            <form method="POST" action="{{ url_for('delete_recording', recording_id=recording.id) }}">
+                <button type="submit" class="btn btn-danger mt-2">Delete</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+{% endblock %}

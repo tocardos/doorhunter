@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/path/to/icon.png">
+    <title>{{ title }}</title>
+    <!--
+	<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+	-->
+	<link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+	<style>
+        .recording-item {
+            margin-bottom: 20px;
+        }
+        .recording-video {
+            width: 100%;
+            max-width: 320px;
+            height: auto;
+        }
+        .recording-timestamp {
+            font-size: 1rem;
+        }
+        .list-group-item {
+        margin-bottom: 15px;
+        padding: 10px;
+        }
+        .form-check-input {
+        margin-left: 10px;
+        }
+        .btn-sm {
+        width: 100%;
+        margin-top: 10px;
+        }
+        .motion {
+            color: gray;
+        }
+        .motion.detected {
+            color: red;
+        }
+        .face {
+            color: gray;
+        }
+        .face.detected {
+            color: green;
+        }
+        .slider-container, .frame-slider-container {
+            margin: 20px;
+        }
+        .slider {
+            width: 100%;
+            -webkit-appearance: none;
+            appearance: none;
+            background: #ddd;
+            height: 5px;
+            outline: none;
+        }
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            background-color: #666;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .slider-labels, .frame-slider-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+        }
+        .slider-labels span, .frame-slider-labels span {
+            text-align: center;
+        }
+        .navbar-brand-container {
+            display: flex;
+            align-items: center;
+            flex-grow: 1;
+        }
+        .connection-status {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 10px;
+            font-size: 0.9rem;
+        }
+        .connection-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 3px;
+        }
+        .connection-active {
+            background-color: #28a745;
+        }
+        .connection-inactive {
+            background-color: #dc3545;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .active {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .inactive {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+    <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/popper.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"></script>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+        <a class="navbar-brand" href="{{ url_for('index') }}">MonICa</a>
+        <div class="connection-status">
+            <span class="connection-indicator {% if connection_status %}connection-active{% else %}connection-inactive{% endif %}"></span>
+            <span>4G</span>
+            <span class="connection-indicator {% if active_connections %}connection-active{% else %}connection-inactive{% endif %}"></span>
+            <span>WiFi</span>
+        </div>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav">
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('status') }}">Status</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('settings') }}">Settings</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('contact') }}">Contact</a>
+                </li>
+                
+				<li class="nav-item">
+                    <a class="nav-link" href="{{ url_for('history') }}">History</a>
+                </li>
+            </ul>
+            
+        </div>
+    </nav>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </div>
+	<!--
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.2/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+	-->
+	<!--
+    <script src="{{ url_for('static', filename='js/jquery-3.5.1.slim.min.js') }}"></script>
+-->
+    
+
+    
+    
+  
+</body>
+</html>

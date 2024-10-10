@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Welcome to Monitoring Intrusion Camera</h1>
+<p>Use the menu to navigate.</p>
+
+<div class="instructions">
+    <h2>How to Use the App</h2>
+    <ul>
+        <li><strong>Navigate:</strong> Use the menu at the top to access different features of the app.</li>
+        <li><strong>Status:</strong> View the live video feed to monitor for any intrusions and app status.</li>
+        <li><strong>Settings:</strong> Adjust the detection sensor, camera position and other settings in the settings menu.</li>
+        <li><strong>Contact:</strong> Configure contact and alert preferences to receive notifications in case of any detected motion.</li>
+		<li><strong>Signal:</strong> Configure signal group and alert preferences to receive notifications in case of any detected motion.</li>
+        <li><strong>History:</strong> Check the history section to review past intrusion events and recorded footage.</li>
+    </ul>
+</div>
+
+<style>
+    .instructions {
+        background-color: #f9f9f9;
+        padding: 10px;
+        border-radius: 5px;
+        margin-top: 20px;
+    }
+
+    .instructions h2 {
+        font-size: 1.5em;
+    }
+
+    .instructions ul {
+        list-style-type: none;
+        padding: 0;
+    }
+
+    .instructions li {
+        margin-bottom: 10px;
+        font-size: 1.2em;
+    }
+
+    .instructions strong {
+        color: #007BFF;  /* Bootstrap primary color */
+    }
+
+    @media (max-width: 600px) {
+        .instructions {
+            padding: 5px;
+            font-size: 1em;
+        }
+        
+        .instructions h2 {
+            font-size: 1.2em;
+        }
+
+        .instructions li {
+            font-size: 1em;
+        }
+    }
+</style>
+{% endblock %}

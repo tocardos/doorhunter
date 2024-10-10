@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block content %}
+
+    <!--<h1>Status </h1>-->
+    
+    <script>
+        window.addEventListener('load', function() {
+    const streamContainer = document.getElementById('camera-stream');
+    let currentImg = document.createElement("img");
+    currentImg.className = "img-fluid";
+    streamContainer.appendChild(currentImg);
+
+    let ws;
+    const reconnectInterval = 5000;
+
+    function connectWebSocket() {
+        ws = new WebSocket("ws://" + window.location.host + "/ws");
+        
+        ws.onmessage = function(event) {
+            // Create a new temporary URL for the incoming image
+            const newUrl = URL.createObjectURL(new Blob([event.data], { type: "image/jpeg" }));
+            
+            // Create a new temporary image to handle the loading
+            const tempImg = new Image();
+            
+            tempImg.onload = function() {
+                // Only when the new image is loaded:
+                // 1. Update the src of the visible image
+                // 2. Revoke the old URL from the visible image
+                // 3. Revoke the temporary URL
+                const oldUrl = currentImg.src;
+                currentImg.src = newUrl;
+                
+                if (oldUrl && oldUrl.startsWith('blob:')) {
+                    URL.revokeObjectURL(oldUrl);
+                }
+                
+                // We don't need the temporary image anymore
+                tempImg.src = '';
+            };
+            
+            tempImg.onerror = function() {
+                // If loading fails, make sure to revoke the URL
+                URL.revokeObjectURL(newUrl);
+            };
+            
+            // Start loading the new image
+            tempImg.src = newUrl;
+        };
+        
+        ws.onclose = function(event) {
+            console.log(`WebSocket closed, attempting to reconnect in ${reconnectInterval / 1000} seconds...`);
+            setTimeout(connectWebSocket, reconnectInterval);
+        };
+
+        ws.onerror = function(error) {
+            console.error('WebSocket error:', error);
+            ws.close();
+        };
+    }
+
+    // Initial WebSocket connection
+    connectWebSocket();
+});
+    </script>
+</head>
+<body class="container">
+    <h1 class="text-center">Live Monitor</h1>
+    <div id="camera-stream" class="d-flex justify-content-center"></div>
+    <div id="debug-data" class="text-center mt-3">
+        <span id="fps-status">FPS: </span> | 
+        <span id="cpu-load-status">CPU Load: </span> | 
+        <span id="motion-status" class="motion">Motion</span> | 
+        <span id="face-status" class="face">Face</span>
+    </div>
+
+    <!-- Sliding button for MOG Detection -->
+    <div class="text-center mt-4 slider-container">
+        <label for="mogSlider">Motion Detection Mode</label>
+        <input type="range" min="0" max="3" step="1" value="1" class="slider" id="mogSlider">
+        <div class="slider-labels">
+            <span>MOG Detection</span>
+            <span>No Detection</span>
+            <span>Diff</span>
+            <span>KNN detection</span>
+        </div>
+    </div>
+
+    <!-- Sliding button for Face Detection -->
+    <div class="text-center mt-4 slider-container">
+        <label for="faceSlider">Face Detection Mode</label>
+        <input type="range" min="0" max="3" step="1" value="1" class="slider" id="faceSlider">
+        <div class="slider-labels">
+            <span>Yunet</span>
+            <span>No Detection</span>
+            <span> SSD</span>
+            <span>HOG-SVM</span>
+        </div>
+    </div>
+    <!-- Frame Ratio Slider -->
+    <div class="text-center mt-4 frame-slider-container">
+        <label for="frameRatioSlider">Frame Ratio</label>
+        <input type="range" min="1" max="5" step="1" value="1" class="slider" id="frameRatioSlider">
+        <div class="frame-slider-labels">
+            <span>1</span>
+            <span>2</span>
+            <span>3</span>
+            <span>4</span>
+            <span>5</span>
+        </div>
+    </div>
+    
+    
+    <script>
+
+	
+	let reconnectInterval = 5000;  // 5 seconds
+	let maxAttempts = 10;
+	let attempt = 0;
+
+        const debugDataDiv = document.getElementById('debug-data');
+        const fpsStatus = document.getElementById('fps-status');
+        const cpuLoadStatus = document.getElementById('cpu-load-status');
+        const motionStatus = document.getElementById('motion-status');
+        const faceStatus = document.getElementById('face-status');
+       
+        
+        const toggleSocket = new WebSocket(`ws://${window.location.host}/toggle_facedetect`);
+        
+        
+
+        const socket = new WebSocket(`ws://${window.location.host}/debug_data`);
+        socket.addEventListener('open', () => {
+            console.log('WebSocket connection established.');
+        });
+        socket.addEventListener('message', (event) => {
+            const debugData = JSON.parse(event.data);
+            // Update FPS
+            fpsStatus.textContent = `FPS: ${debugData.fps.toFixed(2)}`;
+
+            // Update CPU load
+            cpuLoadStatus.textContent = `CPU Load: ${debugData.cpu_load.toFixed(2)}%`;
+
+            // Update motion status
+            if (debugData.motion_detected) {
+                motionStatus.classList.add('detected');
+            } else {
+                motionStatus.classList.remove('detected');
+            }
+
+            // Update face status
+            if (debugData.face_detected) {
+                faceStatus.classList.add('detected');
+            } else {
+                faceStatus.classList.remove('detected');
+            }
+            //debugDataDiv.textContent = `FPS: ${debugData.fps.toFixed(2)} | CPU: ${debugData.cpu_load.toFixed(2)}% | Motion: ${debugData.motion_detected ? 'Detected' : 'Not Detected'} | Face: ${debugData.face_detected ? 'Detected' : 'Not Detected'}`;
+        });
+
+        socket.addEventListener('close', () => {
+            console.log('WebSocket connection closed.');
+			
+        });
+
+        socket.addEventListener('error', (error) => {
+            console.error('WebSocket error:', error);
+        });
+
+        // WebSocket for toggle synchronization
+        toggleSocket.addEventListener('open', () => {
+            console.log('Toggle WebSocket connection established.');
+        });
+
+        
+
+        toggleSocket.addEventListener('close', () => {
+            console.log('Toggle WebSocket connection closed.');
+        });
+
+        toggleSocket.addEventListener('error', (error) => {
+            console.error('Toggle WebSocket error:', error);
+        });
+
+        
+        
+        const mogSlider = document.getElementById('mogSlider');
+        const faceSlider = document.getElementById('faceSlider');
+        const frameRatioSlider = document.getElementById('frameRatioSlider');
+        //const toggleSocket = new WebSocket(`ws://${window.location.host}/toggle_facedetect`);
+
+        // Sync sliders across clients
+        mogSlider.addEventListener('input', () => {
+            toggleSocket.send(JSON.stringify({ type: 'motion', mode: mogSlider.value }));
+        });
+
+        faceSlider.addEventListener('input', () => {
+            toggleSocket.send(JSON.stringify({ type: 'face_detect', mode: faceSlider.value }));
+        });
+
+        frameRatioSlider.addEventListener('input', () => {
+            //toggleSocket.send(JSON.stringify({ type: 'frameRatio', value: frameRatioSlider.value }));
+            console.log(`Frame Ratio Slider value: ${frameRatioSlider.value}`);
+            toggleSocket.send(JSON.stringify({ type: 'frameRatio', value: parseInt(frameRatioSlider.value, 10) }));
+
+        });
+
+        toggleSocket.addEventListener('message', (event) => {
+            const data = JSON.parse(event.data);
+
+            // Update slider values based on the message type
+            if (data.motion !== undefined) {
+                mogSlider.value = data.motion;
+            }
+            if (data.face_detect !== undefined) {
+                faceSlider.value = data.face_detect;
+            }
+            if (data.frameRatio !== undefined) {
+                frameRatioSlider.value = data.frameRatio;
+            }
+        });
+    </script>
+    {% endblock %}
