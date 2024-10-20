@@ -11,9 +11,14 @@
 <body>
     <h1>WiFi Hotspot Control</h1>
     <div id="status" class="status">Checking status...</div>
-    <button id="toggleButton">Loading...</button>
-
+    <button id="toggleButton" class="btn btn-primary">Loading...</button>
+    <h1>System Control</h1>
+    <button onclick="sendCommand('reboot')" class="btn btn-primary">Reboot</button>
+    <button onclick="sendCommand('shutdown')" class="btn btn-primary">Shutdown</button>
+    <p id="status_pi"></p>
     <script>
+
+        // scripts for wifi control
         $(document).ready(function() {
             function updateStatus() {
                 $.ajax({
@@ -64,6 +69,39 @@
             // Initial status check
             updateStatus();
         });
+        // scripts for shutdown and reboot
+        let socket;
+
+        function connect() {
+            socket = new WebSocket('ws://' + window.location.host + '/ws_pictrl');
+            
+            socket.onmessage = function(event) {
+                document.getElementById('status').textContent = event.data;
+            };
+
+            socket.onclose = function(event) {
+                console.log('WebSocket closed. Reconnecting...');
+                setTimeout(connect, 1000);
+            };
+
+            socket.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function sendCommand(action) {
+            if (socket.readyState === WebSocket.OPEN) {
+                if (confirm(`Are you sure you want to ${action} the Raspberry Pi?`)) {
+                    socket.send(JSON.stringify({action: action, confirm: true}));
+                } else {
+                    socket.send(JSON.stringify({action: action, confirm: false}));
+                }
+            } else {
+                console.error('WebSocket is not open. Cannot send command.');
+            }
+        }
+
+        window.onload = connect;
     </script>
 </body>
 {% endblock %}

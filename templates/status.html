@@ -64,7 +64,10 @@
 });
     </script>
 </head>
-<body class="container">
+<body>
+<!--
+ <class="container">
+    -->
     <h1 class="text-center">Live Monitor</h1>
     <div id="camera-stream" class="d-flex justify-content-center"></div>
     <div id="debug-data" class="text-center mt-3">
@@ -77,12 +80,14 @@
     <!-- Sliding button for MOG Detection -->
     <div class="text-center mt-4 slider-container">
         <label for="mogSlider">Motion Detection Mode</label>
-        <input type="range" min="0" max="3" step="1" value="1" class="slider" id="mogSlider">
+        <input type="range" min="0" max="5" step="1" value="1" class="slider" id="mogSlider">
         <div class="slider-labels">
-            <span>MOG Detection</span>
-            <span>No Detection</span>
-            <span>Diff</span>
-            <span>KNN detection</span>
+            <span>MOG </span>
+            <span>diff</span>
+            <span>mean</span>
+            <span>No </span>
+            <span>blur</span>
+            <span>KNN </span>
         </div>
     </div>
 

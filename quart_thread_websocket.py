@@ -8,6 +8,7 @@ from sqlalchemy import select
 from picamera2 import Picamera2,MappedArray
 from picamera2.encoders import MJPEGEncoder,H264Encoder,Quality
 from picamera2.outputs import FileOutput,CircularOutput
+from libcamera import Transform
 from queue import Queue
 from threading import Thread
 
@@ -21,7 +22,7 @@ import psutil
 import json
 import os
 import logging
-#from yunet import YuNet
+
 # import from local definitions
 from config import init_db, get_db, DatabaseOperations, Contact
 from config import dongle, connection_status_processor
@@ -30,7 +31,9 @@ from functools import wraps
 # import for async functions
 import threading
 from concurrent.futures import ThreadPoolExecutor
-
+import multiprocessing
+# import for pir detection
+import RPi.GPIO as GPIO
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -47,17 +50,17 @@ executor = ThreadPoolExecutor()
 
 # Global variable to store the Monica instance for multi access
 Monica = None
-processing_face_det = 'Yunet'  # Initial processing mode for facedetect
+#processing_face_det = 'Yunet'  # Initial processing mode for facedetect
 processing_state = True  # Initial processing state
-min_area = 500 # minimum area for knn detection
+min_area = 200 # minimum area for knn detection
 # value is based on frame of 320*240= 76,800 pixels
 # full body is about 53*80 pixels = 4240 pixels ( area)
 # partial body detection is lower than 4240, so on the average 750
 
 # To hold the current state of the sliders
 slider_state = {
-    'motion': 2,          # Default to "No Detection"
-    'face_detect': 2,         # Default to "No Detection"
+    'motion': 5,          # Default to "No Detection"
+    'face_detect': 3,         # Default to "No Detection"
     'frameRatio': 2    # Default to "Frame Ratio 1"
 }
 face_detect_mapping = {
@@ -68,23 +71,25 @@ face_detect_mapping = {
 }
 motion_detect_mapping = {
     0: 'mog',
-    1: 'no processing',
-    2: 'blurred',
-    3: 'knn'
+    1: 'diff',
+    2: 'numpy',
+    3: 'no processing',
+    4: 'blurred',
+    5: 'knn'
 }
 connected_clients = []
 
-framerate = 25 # 25 frames per second, more than enough
+#framerate = 25 # 25 frames per second, more than enough
 preroll = 3 # preroll time of video recording prior of detection
-lores_size = (640,480)
-main_size  = (1024,768)
-decimation_factor =2 # lores downsizes by this facto to spare cpu
+#lores_size = (640,480)
+#main_size  = (1024,768)
+#decimation_factor =2 # lores downsizes by this facto to spare cpu
 
 # trying to add an overlay, this is done on the main output and not before the encoder
-overlay = np.zeros((300, 400, 4), dtype=np.uint8)
-overlay[:150, 200:] = (255, 0, 0, 64)
-overlay[150:, :200] = (0, 255, 0, 64)
-overlay[150:, 200:] = (0, 0, 255, 64)
+#overlay = np.zeros((300, 400, 4), dtype=np.uint8)
+#overlay[:150, 200:] = (255, 0, 0, 64)
+#overlay[150:, :200] = (0, 255, 0, 64)
+#overlay[150:, 200:] = (0, 0, 255, 64)
 
 # method to incrust text into GPU before encoding
 # to be done adding frame around face detection
@@ -106,10 +111,45 @@ face_detect_threshold = 0.80
 # Global variable to track the number of active WebSocket connections
 active_connections = 0
 
+#---------------------------------------------------------------
+#
+# JSON config file
+#
+#---------------------------------------------------------------
+
+def load_config(config_file):
+    
+    try:
+        with open(config_file, 'r') as f:
+            print(f)
+            return json.load(f)
+    except Exception as e:
+            logger.error(f"Error while opening config file: {config_file} with : {str(e)}")
+            return None
+
+def get_platform_settings(config):
+    try:
+
+        platform = config['basic_settings']['platform']
+        return config['platform_settings'][platform]
+    except Exception as e:
+        logger.error(f"Error while reading platform settings : {str(e)}")
+        return None
 
 
+def get_camera_settings(config):
+    camera_model = config['basic_settings']['camera']
+    return config['camera_settings'][camera_model]
 
+def get_motion_settings(config):
+    motion_algo = config['basic_settings']['motion']
+    return config['motion_settings'][motion_algo]
 
+#----------------------------------------------------------------------
+#
+#   I/O BUFFER
+#
+#----------------------------------------------------------------------
 # io buffer used for streaming
 class StreamingOutput(io.BufferedIOBase):
     def __init__(self):
@@ -120,14 +160,32 @@ class StreamingOutput(io.BufferedIOBase):
         self.frame = buf
         self.queue.put(buf)
 
+class AdaptiveClient:
+    def __init__(self, websocket):
+        self.websocket = websocket
+        self.frame_rate = 30
+        self.resolution = (640, 480)
+        self.last_frame_time = time.time()
+
+
+#---------------------------------------------------------------------
+#
+#   VIDEO PROCESSOR
+#
+#---------------------------------------------------------------------
+
 frame_queue = Queue()
 
 class VideoProcessor:
-    def __init__(self,app_loop,recording_dir='recordings'):
+    def __init__(self,app_loop,recording_dir='recordings',config_file="poc3/config.json"):
 
         self.app_loop = app_loop
         self.motion_detected = 0
         self._shutdown = threading.Event()
+        # queue for frmae multiprocessing 
+        self.detections = asyncio.Queue()
+        self.face_detection_queue = multiprocessing.Queue()
+
         self.face_detected = 0
         self.recording = False
         self.video_writer = None
@@ -138,6 +196,10 @@ class VideoProcessor:
         self.latest_frame= None
         self.processing = True
         self.running = True
+        # load json config file
+        config= load_config(config_file)
+        # get platform type ( pi4, Pi5, piW2..)
+        platform_settings = get_platform_settings(config)
 
         self.recording_dir = recording_dir
 		# Get the current directory where the script is located
@@ -153,14 +215,31 @@ class VideoProcessor:
         # Ensure the directory exists, or create it
         os.makedirs(self.relative_path, exist_ok=True)
         self.picam2 = Picamera2()
+        # for pi camera wide angle no ir mode 1 2304x1296 [56.03 fps - (0, 0)/4608x2592 crop]
+        # mode 2 has mode pixel but only 14fps 4608x2592 [14.35 fps - (0, 0)/4608x2592 crop]
         mode=self.picam2.sensor_modes[1]
+        # load camera and gpu config from config.json
+        framerate = config['basic_settings']['framerate']
+        self.decimation_factor = config['basic_settings']['decimation_factor']
+        self.lores_size = (
+            platform_settings['lores_resolution']['width'],
+            platform_settings['lores_resolution']['height']
+            )
+        self.main_size = (
+            platform_settings['main_resolution']['width'],
+            platform_settings['main_resolution']['height']
+        )
+        format_main = platform_settings['main']
+        format_lores = platform_settings['lores']
 
         video_config = self.picam2.create_video_configuration(
             sensor={"output_size":mode['size'],'bit_depth':mode['bit_depth']},
-            main={"size": main_size, "format": "YUV420"},
-            lores={"size": lores_size, "format": "RGB888"},
+            main={"size": self.main_size, "format": format_main},
+            lores={"size": self.lores_size, "format": format_lores},
             #controls={"FrameDurationLimits": (40000, 40000)},
-            controls={'FrameRate': framerate}
+            #controls={'FrameRate': framerate},
+            controls={'FrameRate': framerate,'Saturation':0.0}
+            #transform=(Transform(vflip=True))
         )
         self.picam2.configure(video_config)
         self.angle = 0
@@ -191,6 +270,7 @@ class VideoProcessor:
 
         # Parameters for motion detection
         self.prev_frame = None
+        self.prev_frame_blurred = None
         self.motion_threshold = 30 # minimum threshold for frame comparison
         self.motion_maxval = 255 # max value for frame comparison
         # drawback when using gpu incrust, it plays a role in the motion detection, as the 
@@ -199,14 +279,14 @@ class VideoProcessor:
         # parameter for mog motion detection
         
         
-        self.backSub = cv2.createBackgroundSubtractorMOG2(history=500,
+        self.backSub = cv2.createBackgroundSubtractorMOG2(history=300,
                                                           varThreshold=16, # typical value 8-25
                                                           detectShadows=False)
         # Create KNN background subtractor
         self.mog_threshold = 180
         self.knn_threshold = 180
         self.knn = cv2.createBackgroundSubtractorKNN(
-                   history=500,
+                   history=300,
                    dist2Threshold=400, # default is 400 ( distance )
                    detectShadows=False
                 ) 
@@ -216,7 +296,7 @@ class VideoProcessor:
 
         # so far knn seems to be faster with about 2ms per frame while mog is about 4ms
         # in order to decrease cpu load we will try working with half size frame
-        self.lores_half_size = (lores_size[0]//decimation_factor,lores_size[1]//decimation_factor)
+        self.lores_half_size = (self.lores_size[0]//self.decimation_factor,self.lores_size[1]//self.decimation_factor)
         # Load Yunet face detection model
         self.face_detector_yunet = cv2.FaceDetectorYN.create(
             model='/home/baddemanax/opencv_zoo/models/face_detection_yunet/face_detection_yunet_2023mar.onnx',
@@ -246,10 +326,12 @@ class VideoProcessor:
         if hasattr(cv2.dnn, 'DNN_TARGET_CPU_FP16'):
            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU_FP16)
         # Initialize class labels
+        # we need all classes as it will return list indexes
         self.classes = ["background", "aeroplane", "bicycle", "bird", "boat",
                         "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
                         "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
                         "sofa", "train", "tvmonitor"]
+        
         
         # Performance settings
         self.conf_threshold = 0.5
@@ -284,31 +366,37 @@ class VideoProcessor:
         
             # check for motion detection results from queue
             if not motion_queue.empty():
-                width,heigth = motion_queue.get()
+                (x, y, w, h) = motion_queue.get()
+                (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                #x, y, w, h = x*,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
+                cv2.rectangle(m.array, (x, y), (x+w, y+h), (0, 255, 0), 2)
                 radius = 20
-                cv2.circle(m.array, (width*decimation_factor - round(radius/2), radius), radius, (0, 0, 255), -1)
+                cv2.circle(m.array, (w*self.decimation_factor - round(radius/2), radius), radius, (0, 0, 255), -1)
             if not motion_queue_mog.empty():
                 large_contours = motion_queue_mog.get()
                 for cnt in large_contours:
                     x, y, w, h = cv2.boundingRect(cnt)
                     # we include decimetion factor as it is computed on smaller frame
-                    x, y, w, h = x*decimation_factor,y*decimation_factor,w*decimation_factor,h*decimation_factor
+                    (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                    #x, y, w, h = x*self.decimation_factor,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
                     cv2.rectangle(m.array, (x, y), (x + w, y + h), (0, 0, 200), 3)
             if not motion_queue_knn.empty():
                 contours = motion_queue_knn.get()
                 # Draw rectangles around large enough contours
                 for contour in contours:
-                    if cv2.contourArea(contour) > min_area:
+                    #if cv2.contourArea(contour) > min_area:
                         (x, y, w, h) = cv2.boundingRect(contour)
                         # we include decimetion factor as it is computed on smaller frame
-                        x, y, w, h = x*decimation_factor,y*decimation_factor,w*decimation_factor,h*decimation_factor
+                        (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                        #x, y, w, h = x*self.decimation_factor,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
                         cv2.rectangle(m.array, (x, y), (x+w, y+h), (0, 255, 0), 2)
             if not motion_queue_blur.empty():
                 (x, y, w, h) = motion_queue_blur.get()
                 #for contour in contours:
                 #(x, y, w, h) = cv2.boundingRect(contours)
                 # we include decimetion factor as it is computed on smaller frame
-                x, y, w, h = x*decimation_factor,y*decimation_factor,w*decimation_factor,h*decimation_factor
+                (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                #x, y, w, h = x*self.decimation_factor,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
                 cv2.rectangle(m.array, (x, y), (x+w, y+h), (0, 255, 0), 2)
 
 
@@ -326,21 +414,40 @@ class VideoProcessor:
                             print(f"face detected {scores[i]}")
                         
                             x, y, w, h = (face.left(), face.top(), face.width(), face.height())
-                            x,y,w,h = x*decimation_factor,y*decimation_factor,w*decimation_factor,h*decimation_factor
+                            (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                            #x,y,w,h = x*decimation_factor,y*decimation_factor,w*decimation_factor,h*decimation_factor
                             cv2.rectangle(m.array, (x, y), (x + w, y + h), (255, 0, 0), 3)
                 
                 elif self.toggle_facedetect =='Yunet':
                         if (scores>face_detect_threshold):
                             print(f"face detected {scores}")
                             box = list(map(int, faces[:4]))
-                            box = [value * decimation_factor for value in box]
+                            box = [value * self.decimation_factor for value in box]
 
                             cv2.rectangle(m.array, box, (255, 0, 0), 3)
             if not detection_queue_hog.empty():
                 pick = detection_queue_hog.get()
                 for (x1, y1, x2, y2) in pick:
-                    x1,y1,x2,y2 = x1*decimation_factor,y1*decimation_factor,x2*decimation_factor,y2*decimation_factor
+                    (x1, y1, x2, y2) = [i * self.decimation_factor for i in (x1, y1, x2, y2)]
+                    #x1,y1,x2,y2 = x1*decimation_factor,y1*decimation_factor,x2*decimation_factor,y2*decimation_factor
                     cv2.rectangle(m.array, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+    def grayout(self,request):
+        # can be used as pre buffer to convert color to gray
+        # this prevents main output to be gray
+        # must be in YUV420 we just keep the Y plane
+        with MappedArray(request, "lores") as m:
+            # Extract Y (luminance) plane as grayscale
+            m.array[:self.lores_size[1], :self.lores_size[0]] = m.array[:self.lores_size[1], :self.lores_size[0]]
+
+            # Zero out U and V planes (half resolution for YUV420)
+            uv_height = self.lores_size[1] // 2
+            uv_width = self.lores_size[0] // 2
+        
+            # U plane
+            m.array[self.lores_size[1]:self.lores_size[1] + uv_height, :uv_width] = 0
+            # V plane
+            m.array[self.lores_size[1] + uv_height:self.lores_size[1] + 2 * uv_height, :uv_width] = 0
 
     #- - - - - - - - - - - - - - -
     # MOTION DETECTION KNN
@@ -357,7 +464,7 @@ class VideoProcessor:
             # Find contours
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             # put detection value in queue for ploting rectangle
-            motion_queue_knn.put(contours)
+            #motion_queue_knn.put(contours)
             
 
             for contour in contours:
@@ -370,6 +477,7 @@ class VideoProcessor:
             if len(contours)>=1 & self.motion_detected ==1:
                 # Combine all contours into one array
                 all_points = np.vstack(contours)
+                motion_queue_knn.put(all_points)
                 # Find bounding box for all points
                 x, y, w, h = cv2.boundingRect(all_points)
                 images=(x,y,w,h)       
@@ -404,12 +512,13 @@ class VideoProcessor:
             # filtering contours using list comprehension
             large_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_contour_area]
             
-            motion_queue_mog.put(large_contours)
+            #motion_queue_mog.put(large_contours)
             # in ordre to decrease prcessing we only search people in motion detected zone
             images = None
             if large_contours:
                 
                 all_points = np.vstack(contours)
+                motion_queue_mog.put(all_points)
                 # Find bounding box for all points
                 x, y, w, h = cv2.boundingRect(all_points)
                 if w*h>min_area:
@@ -443,26 +552,35 @@ class VideoProcessor:
         #if self.frame_count % self.process_every_n_frames == 0:
         #    self.frame_count=0
             tm= cv2.TickMeter()
-            if self.prev_frame is not None:
-                tm.start()
-                frame_delta = cv2.absdiff(self.prev_frame, frame)
-                _, thresh = cv2.threshold(frame_delta, self.motion_threshold, self.motion_maxval, cv2.THRESH_BINARY)
-                self.motion_detected = np.sum(thresh)/self.motion_maxval > self.motion_detect_level
+            tm.start()
+            if self.prev_frame is  None:
+                self.prev_frame = frame
+            frame_delta = cv2.absdiff(self.prev_frame, frame)
+            _, thresh = cv2.threshold(frame_delta, self.motion_threshold, self.motion_maxval, cv2.THRESH_BINARY)
+            self.motion_detected = np.sum(thresh)/self.motion_maxval > self.motion_detect_level
 
             self.prev_frame = frame
+            thresh = cv2.dilate(thresh, None, iterations=2)
+            cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
+		        cv2.CHAIN_APPROX_SIMPLE)
+            contours = cnts[0] if len(cnts) == 2 else cnts[1]
             tm.stop()
             #print(f"time to detect motion : {round(tm.getTimeMilli(),2)} ms")
             tm.reset()
             # Draw motion and face detection results
-            if self.motion_detected:
+            images = None
+            if len(contours)>=1 & self.motion_detected ==1:
+                # Combine all contours into one array
+                all_points = np.vstack(contours)
+                # Find bounding box for all points
+                x, y, w, h = cv2.boundingRect(all_points)
+                
+                images=(x,y,w,h)
+            #if self.motion_detected:
                 print(f"motion detected {np.sum(thresh)}")
-                height, width = frame.shape
-                # drawing is moved to camera array
-                #radius = 15
-                #cv2.putText(frame, "Motion Detected", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                #cv2.circle(frame, (width - radius, radius), radius, (0, 0, 255), -1)
-                motion_queue.put((height, width))
-            return frame
+                #height, width = frame.shape
+                motion_queue.put((x,y,w,h))
+            return images
     #- - - - - - - - - - - - - - - - - - - -
     # FRAME DIFF BLURED
     #- - - - - - - - - - - - - - - - - - - -
@@ -475,17 +593,17 @@ class VideoProcessor:
         self.motion_detected=0
         gray = cv2.GaussianBlur(frame, (21, 21), 0)
         # if the first frame is None, initialize it
-        if self.prev_frame is None:
-            self.prev_frame = gray.copy().astype("float")
+        if self.prev_frame_blurred is None:
+            self.prev_frame_blurred = gray.copy().astype("float")
             #continue
         # accumulate the weighted average between the current frame and
         # previous frames, then compute the difference between the current
         # frame and running average
-        cv2.accumulateWeighted(gray, self.prev_frame, 0.5)
+        cv2.accumulateWeighted(gray, self.prev_frame_blurred, 0.5)
         # compute the absolute difference between the current frame and
         # first frame
         #frameDelta = cv2.absdiff(self.prev_frame, gray)
-        frameDelta = cv2.absdiff(gray, cv2.convertScaleAbs(self.prev_frame))
+        frameDelta = cv2.absdiff(gray, cv2.convertScaleAbs(self.prev_frame_blurred))
         thresh = cv2.threshold(frameDelta, 25, 255, cv2.THRESH_BINARY)[1]
         # dilate the thresholded image to fill in holes, then find contours
         # on thresholded image
@@ -503,7 +621,7 @@ class VideoProcessor:
             # and update the text
             self.motion_detected=1
             (x, y, w, h) = cv2.boundingRect(c)
-            motion_queue_blur.put((x,y,w,h))
+            #motion_queue_blur.put((x,y,w,h))
         
         images = None
         if len(contours)>=1 & self.motion_detected ==1:
@@ -511,6 +629,7 @@ class VideoProcessor:
             all_points = np.vstack(contours)
             # Find bounding box for all points
             x, y, w, h = cv2.boundingRect(all_points)
+            motion_queue_blur.put((x,y,w,h))
             images=(x,y,w,h)
             #print(f"image size: {images}")   
         tm.stop()
@@ -530,6 +649,8 @@ class VideoProcessor:
             tm=cv2.TickMeter()
             # Detect faces using Yunet
             tm.start()
+            height, width,channels = frame.shape
+            self.face_detector_yunet.setInputSize((width,height))
             _, faces = self.face_detector_yunet.detect(frame)
             # next line is to avoid none type is not iterable
             faces = faces if faces is not None else []
@@ -710,25 +831,34 @@ class VideoProcessor:
                     if frame_count % self.process_every_n_frames == 0:
                         # Decode the frame (as it is in a compressed format like MJPEG)
                         frame_array = np.frombuffer(frame, dtype=np.uint8)
+                        
+                        
+                        
+                        #image = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+                        image = cv2.imdecode(frame_array,cv2.IMREAD_GRAYSCALE)
                         if self.toggle_motion == "numpy":
                             if prev is not None:
-                                 mse = np.square(np.subtract(frame_array, prev)).mean()
+                                 #print(f"frame_array shape: {image.shape}")
+                                 #print(f"prev shape: {prev.shape}")
+                                 small_frame = None
+                                 mse = np.square(np.subtract(image, prev)).mean()
+                                 
                                  if mse>7:
                                      print(f"np detection with level {mse}")
                                      self.motion_detected = 1
                                  else:
                                     self.motion_detected = 0
-                            prev = frame_array
-                        
-                        
-                        image = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+                            prev = image
                         # Resize the frame to half of lores size
-                        image = cv2.resize(image, self.lores_half_size, interpolation=cv2.INTER_AREA)
+                        #image = cv2.resize(image, self.lores_half_size, interpolation=cv2.INTER_AREA)
+                        gray_frame = cv2.resize(image, self.lores_half_size, interpolation=cv2.INTER_AREA)
+                        
                         # Convert the frame to grayscale as processing works on grayscale images
-                        gray_frame = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                        #gray_frame = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                         # Run motion detection
                         if self.toggle_motion == 'diff':
-                            small_frame = self.motion_detect(gray_frame)
+                            small_frame = None
+                            self.motion_detect(gray_frame)
                         elif self.toggle_motion == 'mog':
                             small_frame = self.motion_detect_mog(gray_frame)
                         elif self.toggle_motion == 'knn':
@@ -739,20 +869,41 @@ class VideoProcessor:
                         # Run face detection on the frame if motion detected
                         self.face_detected=0 # reset detector flag every frame
                         if self.motion_detected:
+                            #await self.detections.put(('camera', curr_time))
+                            #self.face_detection_queue.put_nowait(small_frame)
+
                             if self.toggle_facedetect == 'DLIB':
                                 self.process_frame_dlib(gray_frame)
                             elif self.toggle_facedetect == 'Yunet':
-                                # yunet cannot work with grayscale
-                                self.process_frame_yunet(image)
-                            elif self.toggle_facedetect == 'hog':
-                                
-                                    self.process_frame_hog(gray_frame)
-                            elif self.toggle_facedetect == 'ssd':
+                                # yunet cannot work with grayscale as one dimension
+                                # copying 3 times grayframe
+                                img = cv2.merge((gray_frame,gray_frame,gray_frame))
+                                # only process face detection in subframe where motion is detected
                                 if small_frame is not None:
                                     (x,y,w,h)= small_frame
-                                    self.process_frame_ssd(image[y:y+h,x:x+w])
+                                                              
+                                    self.process_frame_yunet(img[y:y+h,x:x+w])
                                 else:
-                                    self.process_frame_ssd(image)
+                                    self.face_detector_yunet.setInputSize(self.lores_half_size)
+                                    self.process_frame_yunet(img)
+
+                            elif self.toggle_facedetect == 'hog':
+                                
+                                    if small_frame is not None:
+                                        (x,y,w,h)= small_frame
+                                        self.process_frame_hog(gray_frame)
+                                    else:									
+                                        self.process_frame_hog(gray_frame)
+
+                            elif self.toggle_facedetect == 'ssd':
+                                # ssd cannot work with grayscale image
+                                # copying 3 times grayframe
+                                img = cv2.merge((gray_frame,gray_frame,gray_frame))
+                                if small_frame is not None:
+                                    (x,y,w,h)= small_frame
+                                    self.process_frame_ssd(img[y:y+h,x:x+w])
+                                else:
+                                    self.process_frame_ssd(img)
                         # records clip 
                         self.handle_recording()
                         # adding a check  to avoid cpu dma useless
@@ -849,6 +1000,25 @@ class VideoProcessor:
 
     def shutdown(self):
         self._shutdown.set()
+    
+    async def alert_generator(self):
+        recent_detections = []
+        while True:
+            detection = await self.detections.get()
+            recent_detections.append(detection)
+            
+            current_time = time.time()
+            recent_detections = [d for d in recent_detections if current_time - d[1] < 5]
+
+            if len(set(d[0] for d in recent_detections)) >= 2:
+                alert_message = json.dumps({"type": "alert", "message": "Multiple detections occurred!"})
+                await broadcast(alert_message)
+
+
+async def broadcast( message):
+        for client in self.clients.values():
+            await client.websocket.send(message)
+
 #------------------------------------------------------------------------------
 #
 #   INDEX
@@ -862,6 +1032,17 @@ async def index():
     #return await render_template('index.html', connection_status=status)
     return await render_template('index.html')
 
+# for android phone, they point to index.html
+@app.route('/index.html')
+async def index_index():
+    #return await render_template_string(HTML_TEMPLATE)
+    return await render_template('index.html')
+
+#------------------------------------------------------------------------------
+#
+#   STATUS
+#
+#------------------------------------------------------------------------------
 
 
 @app.route('/status')
@@ -930,6 +1111,34 @@ async def toggle_wifi(action):
         message = "Hotspot turned off"
     
     return jsonify({'success': True, 'message': message})
+
+@app.websocket('/ws_pictrl')
+async def ws_pictrl():
+     while True:
+        data = await websocket.receive_json()
+        if data['action'] == 'reboot':
+            if data['confirm']:
+                await websocket.send('Rebooting...')
+                asyncio.create_task(reboot())
+            else:
+                await websocket.send('Reboot cancelled')
+        elif data['action'] == 'shutdown':
+            if data['confirm']:
+                await websocket.send('Shutting down...')
+                asyncio.create_task(shutdown())
+            else:
+                await websocket.send('Shutdown cancelled')
+
+async def reboot():
+    
+    logger.info(f"system is rebooting from webapp")
+    os.system('sudo /sbin/reboot')
+
+async def shutdown():
+    logger.info(f"system is shutting down from webapp ")
+    
+    os.system('sudo /sbin/shutdown -h now')
+
 
 #--------------------------------------------------------------
 #
@@ -1035,11 +1244,6 @@ async def delete_contact(id):
 
 
 
-# for android phone, they point to index.html
-@app.route('/index.html')
-async def index_index():
-    #return await render_template_string(HTML_TEMPLATE)
-    return await render_template('index.html')
 
 #---------------------------------------------------------------------
 #
@@ -1050,7 +1254,7 @@ async def index_index():
 async def ws():
     global active_connections
     active_connections += 1
-
+    client = AdaptiveClient(websocket._get_current_object())
     loop = asyncio.get_event_loop()  # Get the current event loop
     try:
         while True:
@@ -1226,6 +1430,14 @@ async def send_sms(phone_number, message):
 # we start the thread videoprocessor
 #
 #---------------------------------------------------------------
+def face_detection_process(self):
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        while True:
+            frame = self.face_detection_queue.get()
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+            if len(faces) > 0:
+                asyncio.run_coroutine_threadsafe(self.detections.put(('face', time.time())), asyncio.get_running_loop())
 
 @app.before_serving
 async def startup():
@@ -1235,6 +1447,8 @@ async def startup():
     # Store the main event loop
     main_loop = asyncio.get_event_loop()
     Monica = VideoProcessor(main_loop)
+    #face_detection_process = multiprocessing.Process(target=face_detection_process)
+    #face_detection_process.start()
     Thread(target=Monica.camera_thread, daemon=True).start()
     # Test connection status at startup
     status = await dongle.get_connection_status()

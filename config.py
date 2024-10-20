@@ -174,6 +174,9 @@ class Dongle:
         def _send_sms():
             try:
                 logger.info(f"Attempting to send SMS to {phone_number}")
+                if not self.is_dongle_connected():
+                    logger.warning("4G USB dongle not found")
+                    return False
                 with Connection(self.url) as connection:
                     client = Client(connection)
                     return client.sms.send_sms([phone_number], message) == ResponseEnum.OK.value
@@ -344,3 +347,9 @@ class DatabaseOperations:
         
         
         return success_count, len(contacts)
+
+#-------------------------------------------------------------------------
+#
+#   config file
+#
+#-------------------------------------------------------------------------
