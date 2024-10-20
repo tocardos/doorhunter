@@ -14,7 +14,7 @@ from threading import Thread
 
 import io
 import cv2
-import dlib
+#import dlib
 import numpy as np
 import time
 from datetime import datetime
@@ -177,7 +177,7 @@ class AdaptiveClient:
 frame_queue = Queue()
 
 class VideoProcessor:
-    def __init__(self,app_loop,recording_dir='recordings',config_file="poc3/config.json"):
+    def __init__(self,app_loop,recording_dir='recordings',config_file="doorhunter/config.json"):
 
         self.app_loop = app_loop
         self.motion_detected = 0
@@ -260,7 +260,7 @@ class VideoProcessor:
         self.picam2.start_recording(MJPEGEncoder(), FileOutput(self.output), name="lores")
 
         # Load face detection model
-        self.face_detector = dlib.get_frontal_face_detector()
+        #self.face_detector = dlib.get_frontal_face_detector()
         self.face_detect_threshold = 0.80 # level above considered as good detection
         #self.face_detected = 0
         self.process_every_n_frames = 5
