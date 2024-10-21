@@ -15,6 +15,8 @@ sudo apt-get install ffmpeg
 sudo apt-get install python3-quart
 sudo apt-get install python3-aiosqlite
 sudo apt-get install python3-usb
+sudo apt-get install python3-networkmanager
+
 
 to install dlib without using venv :
 

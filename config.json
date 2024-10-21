@@ -1,12 +1,26 @@
 {
     "basic_settings": {
-      "platform": "pi5",
+      "platform": "piw2",
       "camera": "imx219",
       "framerate": 25,
-      "decimation_factor" :2,
+      "decimation_factor": 2,
       "motion": "knn"
     },
     "platform_settings": {
+      "piw2": {
+        "lores": "YUV420",
+        "lores_resolution": {
+            "width":640,
+            "height":480
+        },
+        "main":"YUV420",
+        "main_resolution": {
+          "width": 1024,
+          "height": 768
+        },
+        "led_pin": 18,
+        "inference":"None"
+      },
       "pi4": {
         "lores": "YUV420",
         "lores_resolution": {
@@ -18,7 +32,8 @@
           "width": 1024,
           "height": 768
         },
-        "led_pin": 18
+        "led_pin": 18,
+        "inference":"hog"
       },
       "pi5": {
         "lores": "RGB888",
@@ -31,7 +46,8 @@
           "width": 1024,
           "height": 768
         },
-        "led_pin": 22
+        "led_pin": 22,
+        "inference":"svm"
       }
     },
     "camera_settings": {
@@ -44,6 +60,17 @@
         "sensor_mode": 1,
         "iso": 200,
         "exposure_mode": "sports"
+      },
+      "ov5647": {
+        "sensor_mode": 1,
+        "iso": 200,
+        "exposure_mode": "sports"
+      },
+      "imx708_wide_noir": {
+        "sensor_mode": 1,
+        "iso": 200,
+        "exposure_mode": "sports"
+
       }
     },
     "motion_settings": {
@@ -61,5 +88,11 @@
     "output_settings": {
       "file_format": "mp4",
       "output_directory": "/home/baddemanax/camera_output"
+    },
+    "inference":{
+      "hog":{
+
+      }
+
     }
   }

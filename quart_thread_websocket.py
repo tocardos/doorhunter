@@ -99,12 +99,12 @@ font = cv2.FONT_HERSHEY_SIMPLEX
 scale = 1
 thickness = 2
 cpul= 0
-detection_queue = Queue()  # Queue for signaling face detection results
-motion_queue = Queue() # Queue for signaling motion detection
-motion_queue_mog = Queue() # queue for mog rectangle detection
-motion_queue_knn = Queue() # queue for knn rectangle detection
-motion_queue_blur = Queue() # queue for motion blurre detection
-detection_queue_hog = Queue() # queue for hog rectangle detection
+detection_queue = Queue(10)  # Queue for signaling face detection results
+motion_queue = Queue(10) # Queue for signaling motion detection
+motion_queue_mog = Queue(10) # queue for mog rectangle detection
+motion_queue_knn = Queue(10) # queue for knn rectangle detection
+motion_queue_blur = Queue(10) # queue for motion blurre detection
+detection_queue_hog = Queue(10) # queue for hog rectangle detection
 face_detect_threshold = 0.80
 #faces = []
 #scores = []
@@ -231,6 +231,7 @@ class VideoProcessor:
         )
         format_main = platform_settings['main']
         format_lores = platform_settings['lores']
+        self.inference = platform_settings['inference']
 
         video_config = self.picam2.create_video_configuration(
             sensor={"output_size":mode['size'],'bit_depth':mode['bit_depth']},
@@ -290,44 +291,46 @@ class VideoProcessor:
                    dist2Threshold=400, # default is 400 ( distance )
                    detectShadows=False
                 ) 
-        # Initialize the HOG descriptor/person detector
-        self.hog = cv2.HOGDescriptor()
-        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-
-        # so far knn seems to be faster with about 2ms per frame while mog is about 4ms
-        # in order to decrease cpu load we will try working with half size frame
         self.lores_half_size = (self.lores_size[0]//self.decimation_factor,self.lores_size[1]//self.decimation_factor)
-        # Load Yunet face detection model
-        self.face_detector_yunet = cv2.FaceDetectorYN.create(
-            model='/home/baddemanax/opencv_zoo/models/face_detection_yunet/face_detection_yunet_2023mar.onnx',
-            config='',
-            input_size=self.lores_half_size,
-            #score_threshold=0.9,
-            #nms_threshold=0.3,
-            #top_k=5000,
-            backend_id=cv2.dnn.DNN_BACKEND_OPENCV,
-            target_id=cv2.dnn.DNN_TARGET_CPU
-            #backend_id=cv2.dnn.DNN_TARGET_CPU,
-            #target_id=cv2.dnn.DNN_BACKEND_OPENCV
-        )
-        # Check for GPU support
-        if cv2.ocl.haveOpenCL():
-            cv2.ocl.setUseOpenCL(True)
-            print("OpenCL acceleration enabled")
-        # Load the MobileNet SSD model
-        self.net = cv2.dnn.readNetFromCaffe(
-            'poc3/static/MobileNetSSD_deploy.prototxt',
-            'poc3/static/MobileNetSSD_deploy.caffemodel'
-        )
-        # Attempt to optimize the model for OpenCV DNN backend
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        # use lower quantisation 
-        if hasattr(cv2.dnn, 'DNN_TARGET_CPU_FP16'):
-           self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU_FP16)
-        # Initialize class labels
-        # we need all classes as it will return list indexes
-        self.classes = ["background", "aeroplane", "bicycle", "bird", "boat",
+        if self.inference != "None":
+            # Initialize the HOG descriptor/person detector
+            self.hog = cv2.HOGDescriptor()
+            self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+
+            # so far knn seems to be faster with about 2ms per frame while mog is about 4ms
+            # in order to decrease cpu load we will try working with half size frame
+        
+            # Load Yunet face detection model
+            self.face_detector_yunet = cv2.FaceDetectorYN.create(
+                model='/home/baddemanax/opencv_zoo/models/face_detection_yunet/face_detection_yunet_2023mar.onnx',
+                config='',
+                input_size=self.lores_half_size,
+                #score_threshold=0.9,
+                #nms_threshold=0.3,
+                #top_k=5000,
+                backend_id=cv2.dnn.DNN_BACKEND_OPENCV,
+                target_id=cv2.dnn.DNN_TARGET_CPU
+                #backend_id=cv2.dnn.DNN_TARGET_CPU,
+                #target_id=cv2.dnn.DNN_BACKEND_OPENCV
+            )
+            # Check for GPU support
+            if cv2.ocl.haveOpenCL():
+                cv2.ocl.setUseOpenCL(True)
+                print("OpenCL acceleration enabled")
+            # Load the MobileNet SSD model
+            self.net = cv2.dnn.readNetFromCaffe(
+                'poc3/static/MobileNetSSD_deploy.prototxt',
+                'poc3/static/MobileNetSSD_deploy.caffemodel'
+            )
+            # Attempt to optimize the model for OpenCV DNN backend
+            self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            # use lower quantisation 
+            if hasattr(cv2.dnn, 'DNN_TARGET_CPU_FP16'):
+                self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU_FP16)
+            # Initialize class labels
+            # we need all classes as it will return list indexes
+            self.classes = ["background", "aeroplane", "bicycle", "bird", "boat",
                         "bottle", "bus", "car", "cat", "chair", "cow", "diningtable",
                         "dog", "horse", "motorbike", "person", "pottedplant", "sheep",
                         "sofa", "train", "tvmonitor"]
@@ -466,13 +469,13 @@ class VideoProcessor:
             # put detection value in queue for ploting rectangle
             #motion_queue_knn.put(contours)
             
-
+            
             for contour in contours:
                 if cv2.contourArea(contour) > min_area:
                     self.motion_detected =1
                     #(x, y, w, h) = cv2.boundingRect(contour)
                     #images.append(frame[y:y+h,x:x+w])
-
+            
             images = None
             if len(contours)>=1 & self.motion_detected ==1:
                 # Combine all contours into one array
@@ -480,6 +483,8 @@ class VideoProcessor:
                 motion_queue_knn.put(all_points)
                 # Find bounding box for all points
                 x, y, w, h = cv2.boundingRect(all_points)
+                
+                    
                 images=(x,y,w,h)       
 
             tm.stop()
@@ -868,7 +873,7 @@ class VideoProcessor:
 	
                         # Run face detection on the frame if motion detected
                         self.face_detected=0 # reset detector flag every frame
-                        if self.motion_detected:
+                        if self.motion_detected & (self.inference != "None"):
                             #await self.detections.put(('camera', curr_time))
                             #self.face_detection_queue.put_nowait(small_frame)
 
@@ -904,6 +909,11 @@ class VideoProcessor:
                                     self.process_frame_ssd(img[y:y+h,x:x+w])
                                 else:
                                     self.process_frame_ssd(img)
+                        else:
+                            if self.motion_detected:
+                                self.face_detected=1
+                            else:
+                                self.face_detected=0
                         # records clip 
                         self.handle_recording()
                         # adding a check  to avoid cpu dma useless
@@ -923,7 +933,7 @@ class VideoProcessor:
                     if frame_queue.qsize() < 10:  # Limit queue size to prevent memory issues
                         frame_queue.put(frame)
                     else:
-                        print("too many frames in queue")
+                        print(f"too many frames in queue : {frame_queue.qsize()}")
                         frame_queue.get()  # Remove oldest frame
                         frame_queue.put(frame)
                 #time.sleep(0.03)
