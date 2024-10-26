@@ -1,7 +1,7 @@
 {
     "basic_settings": {
-      "platform": "piw2",
-      "camera": "imx219",
+      "platform": "pi5",
+      "camera": "imx708_wide_noir",
       "framerate": 25,
       "decimation_factor": 2,
       "motion": "knn"
@@ -54,22 +54,30 @@
       "imx219": {
         "sensor_mode": 2,
         "iso": 100,
-        "exposure_mode": "auto"
+        "exposure_mode": "auto",
+        "hflip":1,
+        "vflip":1
       },
       "imx477": {
         "sensor_mode": 1,
         "iso": 200,
-        "exposure_mode": "sports"
+        "exposure_mode": "sports",
+        "hflip":1,
+        "vflip":1
       },
       "ov5647": {
         "sensor_mode": 1,
         "iso": 200,
-        "exposure_mode": "sports"
+        "exposure_mode": "sports",
+        "hflip":1,
+        "vflip":1
       },
       "imx708_wide_noir": {
         "sensor_mode": 1,
         "iso": 200,
-        "exposure_mode": "sports"
+        "exposure_mode": "sports",
+        "hflip":0,
+        "vflip":0
 
       }
     },

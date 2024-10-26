@@ -200,7 +200,7 @@ class VideoProcessor:
         config= load_config(config_file)
         # get platform type ( pi4, Pi5, piW2..)
         platform_settings = get_platform_settings(config)
-
+        camera_settings = get_camera_settings(config)
         self.recording_dir = recording_dir
 		# Get the current directory where the script is located
         self.current_directory = os.path.dirname(__file__)
@@ -217,7 +217,9 @@ class VideoProcessor:
         self.picam2 = Picamera2()
         # for pi camera wide angle no ir mode 1 2304x1296 [56.03 fps - (0, 0)/4608x2592 crop]
         # mode 2 has mode pixel but only 14fps 4608x2592 [14.35 fps - (0, 0)/4608x2592 crop]
-        mode=self.picam2.sensor_modes[1]
+        #
+        mode = camera_settings['sensor_mode']
+        mode=self.picam2.sensor_modes[mode]
         # load camera and gpu config from config.json
         framerate = config['basic_settings']['framerate']
         self.decimation_factor = config['basic_settings']['decimation_factor']
@@ -232,6 +234,8 @@ class VideoProcessor:
         format_main = platform_settings['main']
         format_lores = platform_settings['lores']
         self.inference = platform_settings['inference']
+        vfl = camera_settings['vflip']
+        hfl = camera_settings['hflip']
 
         video_config = self.picam2.create_video_configuration(
             sensor={"output_size":mode['size'],'bit_depth':mode['bit_depth']},
@@ -239,8 +243,8 @@ class VideoProcessor:
             lores={"size": self.lores_size, "format": format_lores},
             #controls={"FrameDurationLimits": (40000, 40000)},
             #controls={'FrameRate': framerate},
-            controls={'FrameRate': framerate,'Saturation':0.0}
-            #transform=(Transform(vflip=True))
+            controls={'FrameRate': framerate,'Saturation':0.0},
+            transform=Transform(vflip=vfl,hflip=hfl)
         )
         self.picam2.configure(video_config)
         self.angle = 0
@@ -384,8 +388,12 @@ class VideoProcessor:
                     #x, y, w, h = x*self.decimation_factor,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
                     cv2.rectangle(m.array, (x, y), (x + w, y + h), (0, 0, 200), 3)
             if not motion_queue_knn.empty():
-                contours = motion_queue_knn.get()
+                #contours = motion_queue_knn.get()
+                (x, y, w, h) = motion_queue_knn.get()
+                (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
+                cv2.rectangle(m.array, (x, y), (x+w, y+h), (0, 255, 0), 2)    
                 # Draw rectangles around large enough contours
+                '''
                 for contour in contours:
                     #if cv2.contourArea(contour) > min_area:
                         (x, y, w, h) = cv2.boundingRect(contour)
@@ -393,6 +401,7 @@ class VideoProcessor:
                         (x, y, w, h) = [i * self.decimation_factor for i in (x, y, w, h)]
                         #x, y, w, h = x*self.decimation_factor,y*self.decimation_factor,w*self.decimation_factor,h*self.decimation_factor
                         cv2.rectangle(m.array, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                '''
             if not motion_queue_blur.empty():
                 (x, y, w, h) = motion_queue_blur.get()
                 #for contour in contours:
@@ -480,9 +489,10 @@ class VideoProcessor:
             if len(contours)>=1 & self.motion_detected ==1:
                 # Combine all contours into one array
                 all_points = np.vstack(contours)
-                motion_queue_knn.put(all_points)
+                #motion_queue_knn.put(all_points)
                 # Find bounding box for all points
                 x, y, w, h = cv2.boundingRect(all_points)
+                motion_queue_knn.put((x, y, w, h))
                 
                     
                 images=(x,y,w,h)       
@@ -810,6 +820,7 @@ class VideoProcessor:
                         'confidence': confidence
                     })
                     self.face_detected=1
+                    
                     print(f"person detected with confidence {confidence}")
             
         tm.stop()
